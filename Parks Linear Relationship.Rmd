@@ -1,0 +1,182 @@
+---
+title: "Final Part 3: Comparing the Parks"
+author: "Brandon Le"
+output: 
+  prettydoc::html_pretty:
+    theme: quartz
+    highlight: github
+---
+
+```{r setup, include=FALSE,}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(here)
+library(gridExtra)
+
+np_trails <- read_csv(here("Final", "national_park_trails.csv"))
+```
+
+The two National Parks closest to San Luis Obispo are **Kings Canyon** and **Sequoia**. These two parks border each other, and are managed under a single forest service; sometimes, they are simply referred to together as “SeKi”.
+
+```{r}
+seki_trails <- np_trails %>%
+  filter(area_name %in% c("Kings Canyon National Park", "Sequoia National Park"))
+```
+
+
+# Trail Elevation Gain
+
+Do the trails in these parks have different profiles of elevation gains? Let's compare the elevation gains of the trails with the total length of the trail.
+```{r}
+plot_park <- ggplot(seki_trails) +
+  geom_point(mapping = aes(x = length*0.621371/1000,
+                           y = elevation_gain,
+                           color = area_name,
+                           ) 
+             ) +
+  labs(x = "Trail length (mi)", 
+       y = "Elevation gain (m)",
+       title = "Distinguished by Location") +
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_color_manual(values=c("gold1", "orchid4")) +
+  annotate("text", y = 2000, x = 100,
+           label = "Kings Canyon", color = "gold1", size = 5) +
+  annotate("text", y = 1000, x = 100,
+           label = "Sequoia", color = "orchid4", size = 5)
+
+
+plot_route <- ggplot(seki_trails) +
+  geom_point(mapping = aes(x = length*0.621371/1000,
+                           y = elevation_gain,
+                           color = route_type,
+                           ) 
+             ) +
+  labs(x = "Trail length (mi)", 
+       y = "Elevation gain (m)",
+       title = "Distinguished by Route Type") +
+  theme_classic() +
+  theme(legend.position = "none", axis.title.y = element_blank()) +
+  scale_color_manual(values=c("royalblue", "springgreen2", "darkorange2")) +
+  annotate("text", y = 3000, x = 100,
+           label = "loop", color = "royalblue", size = 5) +
+  annotate("text", y = 2000, x = 100,
+           label = "out and back", color = "springgreen2", size = 5) +
+  annotate("text", y = 1000, x = 100,
+           label = "point to point", color = "darkorange2", size = 5)
+
+grid.arrange(plot_park, plot_route, nrow = 1)
+
+```
+
+It appears that there is a positive linear relationship between elevation gain and the length of a trail. The correlation is slightly weaker for trails in `Kings Canyon` National Park compared with trails in `Sequioa` National Park, as the points are slightly more spread apart from the regression line (not drawn here).
+
+Similarly, the correlation and slope of the regression line with respect to `loop` and `point to point` trails are slightly lower than compared to `out and back` trails. That means more spread around their corresponding regression lions and for each increase in unit trail length, the predicted increase in elevation gain is lower for `loop` and `point to point` trails compared to `out and back` trails.
+
+# Simple Linear Regression
+
+We are interested in building a model for predicting the elevation gain of a trail at SeKi. We would like for the model to explain as much variability in elevation gain as possible, but as be as simple as possible. Thus, we will focus on finding the simple linear regression that explains the most variability in elevation gain.
+
+We are going to use $R^2$ for our selection criteria, with the goal of finding the “best” model that explains a trail’s elevation gain. We are only going to consider the quantitative variables included in this dataset as contenders for the “best” explanatory variable. That is, we are going to create linear regression models for each quantitative variable versus elevation gain, and see which models have the highest $R^2$ values. 
+
+```{r}
+rsq_elevation <- function(df, var){
+  # in case we get more variables to compare with elevation
+  stopifnot(df$elevation_gain %in% seki_trails$elevation_gain,
+            is.character(var) == TRUE)
+  
+  model <- df %>%
+    lm(elevation_gain ~ df[[var]], data = .)
+  
+  broom::glance(model) %>%
+    pull(r.squared)
+}
+```
+
+```{r}
+map_dbl(c("popularity", "length", "num_reviews"),
+                    rsq_elevation,
+                    df = seki_trails
+                    ) %>%
+  data.frame(Quant_var = c("popularity", "length", "num_reviews"),
+             r_val = .
+             ) %>%
+  slice_max(r_val, n = 2)
+
+```
+We see that length and popularity are the 2 highest $R^2$ values when compared with elevation gains in a linear regression model. Length has a significantly higher $R^2$ value compared to popularity, so our 1st guess was correct!
+
+```{r, warning = FALSE}
+  # warnings occured when removing a couple of points to make plots look better
+plot_length <- ggplot(seki_trails) +
+  geom_point(mapping = aes(x = length*0.621371/1000,
+                           y = elevation_gain,
+                           ) 
+             ) +
+  stat_smooth(mapping = aes(x = length*0.621371/1000,
+                           y = elevation_gain,
+                            ),
+              method = "lm"
+              ) +
+  xlim(0, 150) +
+  ylim(0, 10000) +
+  labs(x = "Trail length (mi)", 
+       y = "Elevation gain (m)",
+       ) +
+  theme_classic() +
+  theme(legend.position = "none") 
+
+plot_pop <- ggplot(seki_trails) +
+  geom_point(mapping = aes(x = popularity,
+                           y = elevation_gain,
+                           ) 
+             ) +
+  stat_smooth(mapping = aes(x = popularity,
+                           y = elevation_gain,
+                            ),
+              method = "lm"
+              ) +
+  xlim(0, 50) +
+  ylim(0, 10000) +
+  labs(x = "Popularity (usage rate scale from 0 to 100)", 
+       y = "Elevation gain (m)",
+       ) +
+  theme_classic() +
+  theme(legend.position = "none", axis.title.y = element_blank()) 
+  
+grid.arrange(plot_length, plot_pop, nrow = 1)
+
+```
+
+# Predictions for Other Parks
+
+Now, we’re going to see how well our model does for predicting the elevation gain of trails at other national parks. We'll use the `predict()` function to get predictions for a new dataset.
+
+```{r, warning = FALSE}
+not_seki_trails <- np_trails %>%
+  filter(!area_name %in% c("Kings Canyon National Park", "Sequoia National Park"))
+
+seki_model <- seki_trails %>%
+    lm(elevation_gain ~ length, data = .)
+
+not_seki_trails$predicted_ele_gains <- predict(seki_model, newdata = not_seki_trails)
+
+ggplot(not_seki_trails) +
+  geom_point(mapping = aes(x = predicted_ele_gains,
+                           y = elevation_gain - predicted_ele_gains,
+                           ) 
+             ) +
+  labs(x = "Fitted Values", 
+       y = "Residuals",
+       title = "Residuals vs Fitted Values for Trails in other National Parks") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "blue") +
+  xlim(0,15000) +
+  ylim(-10000,5000)
+```
+
+We see that when using the linear regression model for our SeKi trails to predict elevation gains for all other trails in our dataset, the residuals follow a pattern of being closely clumped together around small fitted values, and generally increased in distance from 0 as the fitted values increase. This implies that our regression model, which is a good fit for our SeKi trails due to a very high $R^2$ value of .9 (and other assumptions made for a good linear model), is not a good fit for the other trails in the dataset. 
+If our model were a good fit, we would expect the residuals to be normally distributed about 0, which means the observed values are close to the predicted values, differing by some randomly distributed noise. But there is a clear pattern here that's affecting the residuals as the expected elevation gains increase, not being explained by our model.
