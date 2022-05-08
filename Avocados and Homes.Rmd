@@ -1,0 +1,107 @@
+---
+title: "Challenge 4: House Prices and Avocado Toast"
+author: "Brandon Le"
+output:
+  prettydoc::html_pretty:
+    theme: quartz
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE)
+```
+
+## Background
+
+A joke in the media is that Millennials can’t afford houses, because they spend all their money buying avocado toast. Let’s use this dataset to address that claim.
+
+```{r}
+# Our preliminary code that was used in Lab 4
+library(tidyverse)
+library(here)
+
+avocados <- read_csv(here("Labs", "Lab 4", "avocado.csv"))
+```
+
+```{r}
+ca_regions <- c("LosAngeles", "SanDiego", "Sacramento", "SanFrancisco")
+
+avocados_ca <- avocados %>%
+  filter(region %in% ca_regions) %>%
+  separate(Date, into = c("Year", "Month", "Day"), sep = "-") %>%
+  # What's new is that we're selecting only the columns we'll use
+  select(Year, Month, AveragePrice, region)
+```
+
+And here's data from the **Zillow Home Value Index (ZHVI)**: A smoothed, seasonally adjusted measure of the typical home value and market changes across a given region and housing type. It reflects the typical value, using a formula similar but different to the median, for homes whose price is in the 35th to 65th percentile range.
+
+[Link to Zillow's housing data](https://www.zillow.com/research/data/)
+```{r}
+housing <-  read_csv(here("Challenges", "Challenge 4", "zillowhomes.csv"))
+```
+
+Now we need to clean this data up.
+
+```{r}
+housing_clean <- housing %>%
+  filter(StateName == "CA")
+
+housing_clean
+```
+We see that the four regions from our avocado analysis are here, so let's select those observations.
+
+```{r}
+housing_ca <- housing_clean %>%
+  slice(c(1,2,4,5)) %>%
+# Now we're removing the unused columns and renaming our region column
+  select(-c(RegionID, SizeRank, RegionType, StateName)) %>%
+  rename(region = RegionName)
+  housing_ca$region <- c("LosAngeles", "SanFrancisco", "SanDiego", "Sacramento")
+  
+housing_ca
+```
+This leaves us with the typical value of a home across multiple dates from the year 2000 to 2021. We want to only use the values from January 2015 to March 2018, to have a better representation with our avocado data which is also from this time period, and also convert all the dates into a single column.
+
+```{r}
+averages_ca <- housing_ca %>%
+  select(c(region, "2015-01-31":"2018-03-31")) %>%
+  pivot_longer(
+    cols = c("2015-01-31":"2018-03-31"), 
+    names_to = "Date", 
+    values_to = "Typical Value"
+  ) %>%
+  separate(Date, into = c("Year", "Month", "Day"), sep = "-") %>%
+  left_join(avocados_ca, by = c("region", "Year", "Month")) %>%
+  # We're matching the year and months, but its hard to also do that with days.
+  select(-Day)
+
+averages_ca
+```
+This gives us a tibble with both the typical value of a home and the average avocado price for a particular region and month in our timeframe from 2015-2018. There are some **NA** values since some avocado observations weren't performed on a certain month; we can simply remove those observations.
+
+We'll also compute the mean of the average avocado prices by month to get exactly one average per month.
+```{r}
+averages_ca_clean <- averages_ca %>%
+  drop_na() %>%
+  group_by(region, Year, Month, `Typical Value`) %>%
+  summarize(AveragePrice = mean(AveragePrice))
+```
+
+Now let's plot these observations by home price vs. avocado price, where each data point represents a specific month on our timeline.
+
+```{r}
+ggplot(averages_ca_clean) +
+  geom_point(mapping = aes(x = `Typical Value`, y = AveragePrice, color = region)) +
+  labs(
+    title = "Monthly House and Avocado Prices in California from 2015-2018", 
+    x = "Typical Household Value (dollars)", 
+    y = "Mean Avocado Price (dollars)"
+  )
+```
+
+There is a positive association between the cost of the typical household and the mean price of an avocado across Los Angeles, Sacramento, and San Diego. Maybe millenials really can't buy homes, because if they spend their money on expensive avocados, then the homes would most likely be very expensive as well! San Francisco actually had lower mean avocado prices when the typical household value exceeded 1 million, but we can assume millenials can't afford homes in San Francisco anyway because the city is way too expensive to live in.
+
+<br>
+
+The last few sentences are jabs at the nature of this study and is in no way meant to be real statistical analysis.
