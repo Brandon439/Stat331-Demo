@@ -1,0 +1,408 @@
+---
+title: "Final Project: Regression and Simulation"
+author: "Rahul Nair, Brandon Le, Grant Holland, Jin Burge"
+date: '2022-03-12'
+output: 
+  prettydoc::html_pretty:
+    theme: quartz
+    highlight: github
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+```{r}
+# Load in libraries
+
+library(tidyverse)
+library(here)
+library(gganimate)
+library(countrycode)
+library(broom)
+library(gridExtra)
+
+# For table formatting
+library(knitr)
+library(kableExtra)
+library(DT)
+
+# For animation
+library(gifski)
+library(transformr)
+library(plotly)
+```
+
+```{r}
+# Read in data
+
+life_exp <- read_csv(here("Final Project", "life_expectancy_years.csv"))
+sanitation <- read_csv(here("Final Project", "at_least_basic_sanitation_overall_access_percent.csv"))
+```
+
+```{r}
+# Clean data and pivot longer
+
+# life_exp doesn't contain any NA's
+life_exp_clean <- life_exp %>%
+  select(country, `1999`:`2017`) %>%
+  pivot_longer(-country, names_to = "Year", values_to = "Life.Exp")
+
+# rowSums() found here: https://stackoverflow.com/questions/66925076/in-dplyr-filter-rows-with-number-of-na-bigger-than-one
+
+sanitation_clean <- sanitation %>%
+  select(country, `1999`:`2017`) %>%
+  filter(rowSums(is.na(.)) < length(.)*0.5) %>%  # Remove entire countries with more than 50% NA's
+  pivot_longer(-country, names_to = "Year", values_to = "Sanitation") %>%
+  group_by(country) %>%
+  fill(Sanitation, .direction = "downup") %>%  # Impute missing values by country
+  ungroup()
+```
+
+```{r}
+# Join data
+
+life_sanitation <- life_exp_clean %>%
+  inner_join(sanitation_clean, by = c("country", "Year")) %>%
+  mutate(
+    Year = as.integer(Year),
+    Region = countrycode(  # For coloring by Region
+      sourcevar = country,
+      origin = "country.name",
+      destination = "continent"
+    )
+  )
+
+# No NA's in sanitation for 2012
+life_sanitation_2012 <- life_sanitation %>%
+  filter(Year == 2012)
+```
+
+
+# Linear Regression
+
+Let's take a look at the relationship between basic sanitation access versus life expectancy for almost all countries in the year 2012. We measure basic sanitation access by the % of the population who have access to basic sanitation services, such as sewage systems, latrines, or composting toilets. Life expectancy measures the predicted number of years a newborn child would live, assuming current mortality patterns were to remain the same.
+
+We'll assume that there is a linear relationship between the 2 variables and conduct linear regression, where sanitation rate will be our response variable and life expectancy is our explanatory variable.
+
+Our data was pulled from [Gapminder](https://www.gapminder.org/data/), an independent educational non-proﬁt company.
+
+**Preview of Our Data:**
+
+```{r}
+datatable(life_sanitation)
+```
+
+
+```{r}
+# Nice-looking theme to reuse
+
+panel_bkgd <- "#F4F5F9"
+
+nice_theme <- theme(
+  panel.background = element_rect(fill = panel_bkgd),
+  legend.key = element_rect(fill = panel_bkgd),
+  legend.title = element_text(size = 20),
+  legend.text = element_text(size = 15),
+  plot.title.position = "plot",
+  plot.title = element_text(size = 20, margin = margin(b = 20)),
+  text = element_text(size = 12, family = "serif"),
+  axis.title.x = element_text(margin = margin(t = 15)),
+  axis.title.y = element_text(margin = margin(r = 15), angle = 0, vjust = 0.5),
+  axis.text.x = element_text(size = 12),
+  axis.text.y = element_text(size = 12),
+  panel.grid.minor = element_blank(),
+  panel.grid.major = element_blank(),
+)
+
+# Colors to reuse
+my_palette <- c("#0554AF","#F84E2C","#25CD6E","#7A0793","#F1A208")
+```
+
+Here is what the relationship looks like between the two variables we chose to analyze:
+
+```{r fig.width = 9}
+# First visualization
+
+fit <- lm(Life.Exp ~ Sanitation, data = life_sanitation_2012)
+
+life_sanitation_2012 %>%
+  plot_ly(type = "scatter", mode = "markers", colors = my_palette) %>%
+  add_markers(
+    x = ~Sanitation,
+    y = ~Life.Exp,
+    text = ~country,
+    hoverinfo = "text",
+    color = ~Region,
+    opacity = 0.5
+  ) %>%
+  add_lines(
+    x = ~Sanitation,
+    y = fitted(fit),
+    hoverinfo = "skip",
+    line = list(color = "rgb(0,0,0)"),
+    showlegend = F
+  ) %>%
+  layout(
+    legend = list(title = list(text = "<b>Continent</b>")),
+    title = list(text = "Country Life Expectancy vs Basic Sanitation Access in 2012", x = 0),
+    xaxis = list(title = ("% Access to Basic Sanitation"), showgrid = F),
+    yaxis = list(title = ("Life Expectancy (years)"), showgrid = F),
+    plot_bgcolor = panel_bkgd,
+    font = list(color = "#000000", family = "serif")
+  )
+```
+
+
+
+The relationship between life expectancy and basic sanitation rate appears to be positive and linear.
+
+Our dataset also includes the years of each observation, and notice how the regression line changes over time:
+
+```{r}
+# Second visualization
+
+plot_anim <- life_sanitation %>%
+  ggplot(aes(x = Sanitation, y = Life.Exp)) +
+  geom_point(aes(color = Region), size = 2.5, alpha = 0.5) +
+  stat_smooth(method = "lm") +
+  scale_color_manual(values = my_palette) +
+  labs(
+    x = "% of Population Access to Basic Sanitation",
+    y = "Life\nExpectancy\n(years)",
+    title = "Year: {floor(frame_time)}",
+    color = "Continent"
+  ) +
+  transition_time(Year) +
+  nice_theme +
+  theme(
+    axis.title.x = element_text(size = 20, margin = margin(t = 6)),
+    axis.title.y = element_text(size = 20, margin = margin(r = 6)),
+    title = element_text(size = 24)
+  )
+
+# Generate gif once, insert into html every knit
+if (!file.exists("years.gif")) {
+  anim_save(
+    animation = plot_anim,
+    filename = "years.gif",
+    renderer = gifski_renderer(),
+    height = 800,
+    width = 1200
+  )
+}
+```
+
+<center>![](years.gif)</center>
+
+From this animated graph, it appears that the relationship becomes less positive over time, implying that each additional increase in the percent of the population with access to basic sanitation is increasing the country’s predicted life expectancy by less of an amount in later years.
+
+We need to assume independence between observations for linear regression, so we're only going to be looking at observations in the year 2012 to remove the time dependency.
+
+Here are some of the features of our model:
+
+```{r}
+# Fit a linear regression model
+
+model <- life_sanitation_2012 %>%
+  lm(Life.Exp ~ Sanitation, data = .)
+
+model %>%
+  tidy() %>%
+  kable() %>%
+  kable_minimal()
+```
+
+
+For 2012, we have a y-intercept $\hat{\beta_0}$ of 54.9, which means the predicted life expectancy is 54.9 years when no one has access to basic sanitation services.
+
+And our slope estimate $\hat{\beta_1}$ is .22, which means we expect the average life expectancy to increase by .22 years for each % increase in population who has access to basic sanitation services.
+
+Our linear regression line uses the formula:
+
+$$\hat{y} = \hat{\beta_0} + \hat{\beta_1} \cdot x$$
+
+where $\hat{y}$ is the predicted life expectancy and $x$ is the sanitation rate of a particular country in 2012.
+
+And our observed response variables exactly follow the formula:
+
+$$observed~life~expectancy = \hat{\beta_0} + \hat{\beta_1} \cdot sanitation~rate + noise$$
+
+where noise, also called the residual, is the difference between the observed and predicted life expectancy. Assuming a linear regression model is a good fit, we would expect the noise to be normally distributed around 0.
+
+Using the linear formula, our model for the relationship between a country's life expectancy and the percent of its population with access to basic sanitation services is:
+
+$$predicted~life~expectancy = 54.9 + .22 \cdot sanitation~rate$$
+
+Now let's figure out if our linear regression model is an accurate model to use. We'll measure how much variability in the expected longevity is accounted for by our regression.
+
+```{r}
+# Assess model fit
+
+model %>%
+  augment() %>%
+  summarize(
+    "Response Variance" = var(Life.Exp),
+    "Fitted Variance" = var(.fitted),
+    "Residual Variance" = var(.resid),
+    "Proportion of Variability Explained" = `Fitted Variance` / `Response Variance`
+  ) %>%
+  kable() %>%
+  kable_minimal()
+```
+
+
+The proportion of variability is .67, which follows from the formula 
+
+$$proportion~of~variability = R^2 = \frac{Fitted~Variance}{Response~Variance}$$
+
+This indicates that 67% of the variability in Life Expectancy can be explained by the percentage of the population using basic sanitation with the model. In other words, approximately two-thirds of the variability in our regression model is accounted for. The unexplained variability can be attributed to country-specific factors such as gross domestic product, government, accessibility to healthcare, and other socioeconomic influences.
+
+
+# Model Simulation
+
+Notice that we have a formula for observed life expectancy, which is our linear regression line with some added noise. We should be able to simulate or recreate our observed values by adding normally distributed noise around our regression line. This should be fairly accurate, as normally distributed noise, or residuals, with mean 0 is one of the conditions that a linear model is a good fit!
+
+```{r}
+# Noise function
+
+noise <- function(x, mean = 0, sd) {
+  return(x + rnorm(length(x), 
+                   mean, 
+                   sd))
+}
+```
+
+```{r}
+# Generate predictions
+
+predictions <- predict(model)  # Fitted values
+std_err <- sigma(model)  # Standard deviation of the residuals
+```
+
+```{r}
+# Generate simulations
+
+nsims <- 1000
+
+sims <- 1:nsims %>%
+  map_dfc(~tibble(sim = noise(predictions, sd = std_err))) %>%
+  rename_with(  # Rename simulation columns from "sim...x" to "sim_x"
+    str_replace,
+    pattern = "\\.\\.\\.",
+    replace = "_"
+  ) %>%
+  cbind(life_sanitation_2012, .)
+```
+
+```{r fig.width = 9}
+# Side by side plots comparing simulated values to observed ones
+
+buffer <- 3
+min_x <- min(sims$Sanitation) - buffer
+max_x <- max(sims$Sanitation) + buffer
+min_y <- min(sims$Life.Exp, sims$sim_1) - buffer
+max_y <- max(sims$Life.Exp, sims$sim_1) + buffer
+
+obs_plot <- life_sanitation_2012 %>%
+  ggplot() + 
+  geom_point(mapping = aes(x = Sanitation, y = Life.Exp)) +  
+  labs(
+    title = "Observed Data",
+    x = "% Using Basic Sanitation",
+    y = "Life\nExpectancy\n(years)"
+  ) +
+  xlim(min_x, max_x) +
+  ylim(min_y, max_y) +
+  nice_theme
+
+# Use the first set of simulated values
+pred_plot <- sims %>%
+  ggplot() +
+  geom_point(mapping = aes(x = Sanitation, y = sim_1)) +
+  labs(
+    title = "Simulated Data",
+    x = "% Using Basic Sanitation",
+    y = "Life\nExpectancy\n(years)"
+  ) +
+  xlim(min_x, max_x) +
+  ylim(min_y, max_y) +
+  nice_theme
+
+grid.arrange(
+  obs_plot,
+  pred_plot,
+  
+  nrow = 1
+)
+```
+
+
+By construction, the linear regression line is the same for both plots. The density or location of the points is relatively the same as well, with some additional outliers in our simulated data.
+
+Each point either represents a country’s observed life expectancy or simulated life expectancy for 2012. Let's compare the two values for each country.
+
+```{r}
+# Observed data vs simulated data
+
+sims %>%
+  ggplot() +
+  geom_point(mapping = aes(x = Life.Exp, y = sim_1)) +
+  geom_abline(
+    slope = 1,
+    intercept = 0, 
+    color = "red",
+    linetype = "dashed",
+    lwd = 1.5
+  ) +
+  labs(
+    title = "Comparison of Simulated and Observed Life Expectancy",
+    x = "Observed Life Expectancy (Years)",
+    y = "Simulated\nLife\nExpectancy\n(Years)"
+  ) +
+  nice_theme
+```
+
+
+If the simulated life expectancy matches the observed life expectancy, the points would lie exactly on the red line $y = x$. It appears that there are about as many overestimate as there are underestimates of life expectancies in 2012. The scatterplot indicates that our simulated values and our observed values are relatively close. This is also revealed because the $R^2$ value between our simulated and observed life expectancies is 0.43. This means that 43% of the variability in the simulated life expectancies can be explained by the observed life expectancies through the model.
+
+Our simulation was created using random noise, so each simulation will create a different set of points, which may or may not be good representations of our observed data, as each simulation will have its own $R^2$ value. To circumvent this, we’ll perform numerous simulations and compute the $R^2$ value for each simulation.
+
+```{r}
+# Calculate r_squared values
+
+sim_r_sq <- sims %>%
+  select(starts_with("sim")) %>%  # only use simulated columns
+  map(~lm(Life.Exp ~ .x, data = sims)) %>%
+  map(glance) %>%
+  map_dbl(~.$r.squared)
+```
+
+```{r}
+# Histogram of r_squared values
+
+# Use of expression(paste(...)) found here: https://stackoverflow.com/questions/10628547/use-superscripts-in-r-axis-labels
+
+tibble(sim_r_sq) %>%
+  ggplot() +
+  geom_histogram(mapping = aes(x = sim_r_sq), bins = 30) +
+  labs(
+    title = expression(paste("Distribution of R"^"2", " for Simulated Values")),
+    x = expression("Simulated R"^"2"),
+    y = "Frequency"
+  ) +
+  nice_theme
+```
+
+
+In this plot, we see that the simulated datasets have $R^2$ values centered around .45. This means that on average, approximately 45% of the variability in the simulated life expectancies can be explained by the variability of observed life expectancies within the model.
+
+The standard deviation of the distribution is 0.038, meaning the spread of the distribution is small and that the $R^2$ values are about the same. Overall, our model generates data fairly similar, but not close to the observed data.
+
+## Conclusion
+
+Overall, our linear regression model with an R-squared value centered around 0.45 is decent considering we are attempting to explain a complex variable such as life expectancy with a single explanatory variable, sanitation rate. However, further attempts to explore life expectancy could include models other than linear regression that include multiple explanatory variables.
