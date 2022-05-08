@@ -1,2 +1,2 @@
-# Example repository from Stat 331
-Test Repository
+# Interesting Projects from Stat 531: Programming in R
+
